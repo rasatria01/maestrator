@@ -1,0 +1,10 @@
+node_modules/
+.next/
+__pycache__/
+.venv/
+/theorm
+/theorm.exe
+/artifacts/
+/worktrees/
+.theorm/reports/
+.env
