@@ -5,7 +5,7 @@ services:
       POSTGRES_USER: theorm
       POSTGRES_PASSWORD: theorm
       POSTGRES_DB: theorm
-    ports: ["5432:5432"]
+    ports: ["55432:5432"] # 5432 and 5433 are taken by native postgres on this box
     # ponytail: migrations run once on an empty volume via initdb. Swap for a
     # real migration tool (goose/atlas) when 0002 exists.
     volumes:
