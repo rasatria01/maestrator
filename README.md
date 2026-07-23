@@ -76,9 +76,15 @@ the model as observations, narration gets one nudge then fails, and three identi
 are a loop, not persistence. `read_file`, `list_dir` and `grep` resolve every agent-supplied
 path against the worktree root and refuse anything that leaves it.
 
-Not yet: the coder's editing tools (`write_file`, `str_replace`, `git_commit`), `theorm run
---compiled` (needs the scheduler, Phase C), and `theorm:knowledge` into L3 (B5). The `memory`
-and `repository` prompt sections are wired into the budget but have no source until Phase B.
+Phase A5 done: the coder's mutating tools. `write_file` and `str_replace` bound every edit
+twice — the path resolves inside the worktree, and it must fall inside the task's declared
+write set, so a model cannot widen its own reach by asking. `str_replace` demands a unique
+match. `git_commit` stages only the write-set globs (`:(glob)` pathspecs) and refuses when
+nothing in the set changed, so a commit never carries a file the task had no leave to touch.
+
+Not yet: `theorm run --compiled` (needs the scheduler, Phase C), and `theorm:knowledge` into
+L3 (B5). The `memory` and `repository` prompt sections are wired into the budget but have no
+source until Phase B.
 
 The A4 measurement — does an Explorer make the coder read fewer files — needs a competent
 executor model and the `messy-go` fixture. On llama3.2:3b the loop runs correctly and the

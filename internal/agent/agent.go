@@ -58,6 +58,7 @@ func (r *Runner) RunTask(ctx context.Context, runID, key string) (Outcome, error
 	env := tools.Env{
 		Store: r.Store, RunID: runID, TaskID: task.ID, AttemptID: attemptID,
 		Role: task.Role, Allowed: task.Contract.Tools, Dir: r.Dir,
+		WriteSet: task.WriteSet,
 		ReadSet: store.ClaimQuery{
 			Kinds:    task.Contract.ReadSet.ClaimKinds,
 			Subjects: task.Contract.ReadSet.Subjects,

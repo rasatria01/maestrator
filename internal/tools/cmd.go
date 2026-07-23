@@ -16,7 +16,8 @@ import (
 // Native returns the in-process tools (§8.1). MCP tools join the same registry
 // at startup, namespaced by server.
 func Native() []Tool {
-	return append(Memory(), runCmd{}, readFile{}, listDir{}, grepTool{}, taskComplete{})
+	return append(Memory(), runCmd{}, readFile{}, listDir{}, grepTool{},
+		writeFile{}, strReplace{}, gitCommit{}, taskComplete{})
 }
 
 const (

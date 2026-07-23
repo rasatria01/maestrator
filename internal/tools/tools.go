@@ -48,6 +48,7 @@ type Env struct {
 	Role      string
 	Allowed   []string // the role's effective capability set, post-clamp
 	Dir       string   // worktree root; nothing may be written outside it
+	WriteSet  []string // §6.1 write globs; the mutating tools refuse anything outside
 	ReadSet   store.ClaimQuery
 }
 
