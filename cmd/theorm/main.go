@@ -3,10 +3,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -42,8 +45,16 @@ func main() {
 		os.Exit(index(os.Args[2:]))
 	case "memory":
 		os.Exit(memoryCmd(os.Args[2:]))
+	case "curate":
+		os.Exit(curate(os.Args[2:]))
+	case "decay":
+		os.Exit(decay(os.Args[2:]))
+	case "stale":
+		os.Exit(stale(os.Args[2:]))
+	case "retire":
+		os.Exit(retire(os.Args[2:]))
 	default:
-		fmt.Fprintln(os.Stderr, "usage: theorm <compile|run-task|index|memory|debug-prompt|doctor|version>")
+		fmt.Fprintln(os.Stderr, "usage: theorm <compile|run-task|index|memory|curate|decay|stale|retire|debug-prompt|doctor|version>")
 		os.Exit(2)
 	}
 }
@@ -85,6 +96,133 @@ func runTask(args []string) int {
 	}
 	fmt.Fprintln(os.Stderr, out.Reason)
 	return 1
+}
+
+// decay is the §5.8 mechanism 3 nightly job: age unretrieved records and retire
+// the ones that fall through the floor. No git, no repo — it runs over all of L3.
+func decay(args []string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := store.Open(ctx, store.DSN())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "database: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+	decayed, retired, err := db.Decay(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "decay: %v\n", err)
+		return 1
+	}
+	fmt.Printf("decayed %d records, retired %d\n", decayed, retired)
+	return 0
+}
+
+// stale is §5.8 mechanism 4: mark the entity records of the files a run changed
+// stale so retrieval stops serving outdated file summaries. --run pulls the repo
+// and base commit from the run; --base overrides the diff point.
+func stale(args []string) int {
+	fs := flag.NewFlagSet("stale", flag.ExitOnError)
+	repo := fs.String("repo", ".", "working tree to diff")
+	run := fs.String("run", "", "take repo id and base commit from this run")
+	base := fs.String("base", "", "diff against this ref instead (default: the run base, else uncommitted changes)")
+	fs.Parse(args)
+	abs, err := filepath.Abs(*repo)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "stale: %v\n", err)
+		return 1
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := store.Open(ctx, store.DSN())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "database: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+
+	repoID := repoIDFor(abs)
+	baseRef := *base
+	if *run != "" {
+		rid, bc, err := db.RunBase(ctx, *run)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "stale: %v\n", err)
+			return 1
+		}
+		repoID = rid
+		if baseRef == "" {
+			baseRef = bc
+		}
+	}
+
+	// git already emits forward-slash paths relative to the repo root, which is
+	// exactly the "file:<path>" subject the index wrote.
+	diffArgs := []string{"diff", "--name-only", "HEAD"}
+	if baseRef != "" {
+		diffArgs = []string{"diff", "--name-only", baseRef, "HEAD"}
+	}
+	changed, err := gitLines(abs, diffArgs...)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "stale: git diff: %v\n", err)
+		return 1
+	}
+	s, w, err := db.MarkStale(ctx, repoID, changed)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "stale: %v\n", err)
+		return 1
+	}
+	fmt.Printf("%d files changed; marked %d entity records stale, weakened %d procedural records in %s\n",
+		len(changed), s, w, repoID)
+	return 0
+}
+
+func gitLines(dir string, args ...string) ([]string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var lines []string
+	for ln := range strings.SplitSeq(string(out), "\n") {
+		if s := strings.TrimSpace(ln); s != "" {
+			lines = append(lines, s)
+		}
+	}
+	return lines, nil
+}
+
+// curate runs the §5.8 Curator over a finished run: promote up to 10 claims into
+// L3, refresh near-duplicates, park contradictions, and write one episodic
+// record. The scheduler (Phase C) will trigger this at end of run; for now it is
+// on demand.
+func curate(args []string) int {
+	fs := flag.NewFlagSet("curate", flag.ExitOnError)
+	run := fs.String("run", "", "run id")
+	fs.Parse(args)
+	if *run == "" {
+		fmt.Fprintln(os.Stderr, "usage: theorm curate --run <run_id>")
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	db, err := store.Open(ctx, store.DSN())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "database: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+
+	c := &memory.Curator{Store: db, Embed: memory.NewEmbedder()}
+	res, err := c.Curate(ctx, *run)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "curate: %v\n", err)
+		return 1
+	}
+	fmt.Printf("promoted %d of %d claims, bumped %d duplicates, parked %d conflicts, skipped %d over cap; 1 episodic\n",
+		res.Promoted, res.Claims, res.Bumped, res.Parked, res.Skipped)
+	return 0
 }
 
 // memoryCmd is the read side of L3: the same hybrid retrieval agents get, so a
@@ -308,7 +446,9 @@ func compile(args []string) int {
 		return 0
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Embedding the knowledge blocks can take a moment on a cold sidecar, so the
+	// ceiling is generous; it returns as soon as the work is done.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	db, err := store.Open(ctx, store.DSN())
 	if err != nil {
@@ -322,7 +462,58 @@ func compile(args []string) int {
 		fmt.Fprintf(os.Stderr, "\ncreate run: %v\n", err)
 		return 1
 	}
+
+	// B5: a spec's knowledge outlives its run. Ingestion is best-effort — the run
+	// is already committed, and a down sidecar should not fail a compile.
+	if len(s.Knowledge) > 0 || len(s.Prose) > 0 {
+		ix := &memory.Ingester{Store: db, Embed: memory.NewEmbedder()}
+		if n, err := ix.IngestSpec(ctx, s); err != nil {
+			fmt.Fprintf(os.Stderr, "note: knowledge not ingested (%v); run `theorm compile` again once the sidecar is up\n", err)
+		} else {
+			fmt.Printf("  ingested %d knowledge records (provenance spec:%s)\n", n, s.SHA256[:12])
+		}
+	}
 	fmt.Printf("\n  Run with: theorm run --compiled %s\n", runID)
+	return 0
+}
+
+// retire revokes a spec's knowledge from L3 by its provenance hash. Records are
+// retired, not deleted, so the audit trail survives (§5.8).
+func retire(args []string) int {
+	fs := flag.NewFlagSet("retire", flag.ExitOnError)
+	hash := fs.String("hash", "", "spec sha256, when the file is gone")
+	fs.Parse(args)
+	prov := ""
+	switch {
+	case *hash != "":
+		prov = "spec:" + *hash
+	case fs.NArg() == 1:
+		raw, err := os.ReadFile(fs.Arg(0))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "retire: %v\n", err)
+			return 1
+		}
+		sum := sha256.Sum256(raw)
+		prov = "spec:" + hex.EncodeToString(sum[:])
+	default:
+		fmt.Fprintln(os.Stderr, "usage: theorm retire <spec.md> | theorm retire --hash <sha256>")
+		return 2
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := store.Open(ctx, store.DSN())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "database: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+	n, err := db.RetireSpec(ctx, prov)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "retire: %v\n", err)
+		return 1
+	}
+	fmt.Printf("retired %d records with provenance %s\n", n, prov)
 	return 0
 }
 

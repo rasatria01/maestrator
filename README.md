@@ -105,9 +105,40 @@ is tight. A sidecar that is down is not fatal: the loop runs with an empty memor
 than failing. `theorm debug-prompt` retrieves best-effort too, so the printed prompt is the one
 an agent actually sees. `run-task` wires a retriever; tests and callers without a sidecar pass nil.
 
-Not yet: the Curator promotes L1 into L3 (B3), decay and git-driven staleness (B4), and
-`theorm:knowledge` ingestion (B5). `theorm run --compiled` needs the scheduler (Phase C). The
-`repository` section stays empty until repo outlines feed it.
+Phase B3 done: the Curator promotes L1 into L3. `theorm curate --run <id>` takes the run's
+promotable claims — only `tool_observed`/`gate_passed`/`review_passed`/`human_confirmed`, never
+a model's bare `asserted` word — and applies the §5.8 rules in Go: near-duplicates (cosine > 0.92
+against the same repo and mem_type) refresh the existing record instead of adding a row,
+contradictions (same subject and predicate, different object, higher confidence) are parked with
+a `memory.conflict` event, and the rest are written newest-strongest-first up to a hard cap of 10.
+One episodic record is written per run, always. Every rule is enforced in Go, so no prompt can
+talk its way past the cap.
+
+ponytail: promotion is deterministic — it promotes every promotable claim (they are few and
+high-signal) rather than having a model choose via `ltm_propose`. Add the model's selection only
+if the corpus gets noisy. The Curator runs on demand for now; the scheduler (Phase C) will trigger
+it at end of run.
+
+Phase B4 done: memory decays and follows the code. `theorm decay` is the nightly job — records
+nothing has retrieved in 60 days lose a tenth of their confidence, those under 0.25 retire, and
+human-confirmed records are immune. `theorm stale --run <id> --repo <dir>` is the free
+invalidation signal: it diffs what the run changed (`git diff base..HEAD`) and marks those files'
+entity records stale so retrieval stops serving outdated summaries, and drops 0.2 confidence off
+any procedural record that referenced them. Retired and stale records are kept, not deleted, and
+excluded from retrieval — when a run goes wrong you can still see what the system used to believe.
+
+Phase B5 done, and with it Phase B. Compiling a spec now ingests its knowledge into L3:
+`theorm:knowledge` blocks land at their stated confidence, untagged prose lands as weaker
+semantic memory (silence is not consent, §4.3), and every record carries `verified_by=spec:<sha>`.
+Re-compiling the same spec version replaces its records rather than duplicating them, and
+`theorm retire <spec.md>` (or `--hash <sha>`) retires exactly that version's records — kept, not
+deleted, so the audit trail survives. Ingestion is best-effort: a down sidecar warns instead of
+failing the compile.
+
+Not yet: `theorm run --compiled` needs the scheduler (Phase C), which will also trigger `curate`
+and `stale` at end of run instead of by hand. The `repository` prompt section stays empty until
+repo outlines feed it. B6 (the eval harness measuring L3 on vs off) is deferred until there is a
+competent executor model to measure with.
 
 The A4 measurement — does an Explorer make the coder read fewer files — needs a competent
 executor model and the `messy-go` fixture. On llama3.2:3b the loop runs correctly and the
