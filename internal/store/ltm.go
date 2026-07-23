@@ -78,6 +78,68 @@ func (s *Store) LTMCounts(ctx context.Context, repoID string) (map[string]int, e
 	return out, rows.Err()
 }
 
+// Candidate is one record surviving the fusion stage, before rerank. Content
+// is carried so the reranker scores it without a second round-trip.
+type Candidate struct {
+	ID      string
+	Subject string
+	MemType string
+	Content string
+}
+
+// RetrieveCandidates runs the §5.6 fusion: pgvector cosine (top 30) and tsvector
+// ts_rank_cd (top 30) fused by reciprocal rank (k=60) to a top 20, unioned with
+// the exact lane — records whose subject starts with a read-set prefix, always
+// included because a task naming a file must see that file's memory regardless of
+// what the embeddings think. Rerank happens above this, in the memory package.
+func (s *Store) RetrieveCandidates(ctx context.Context, repoID string, queryVec []float32, queryText string, subjectPrefixes []string) ([]Candidate, error) {
+	patterns := make([]string, 0, len(subjectPrefixes))
+	for _, p := range subjectPrefixes {
+		patterns = append(patterns, p+"%")
+	}
+	rows, err := s.pool.Query(ctx, `
+		WITH dense AS (
+		  SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $1::vector) AS rank
+		  FROM ltm_records
+		  WHERE repo_id = $2 AND status = 'active' AND embedding IS NOT NULL
+		  ORDER BY embedding <=> $1::vector LIMIT 30
+		),
+		sparse AS (
+		  SELECT id, ROW_NUMBER() OVER (ORDER BY ts_rank_cd(content_tsv, query) DESC) AS rank
+		  FROM ltm_records, plainto_tsquery('english', $3) query
+		  WHERE repo_id = $2 AND status = 'active' AND content_tsv @@ query
+		  ORDER BY ts_rank_cd(content_tsv, query) DESC LIMIT 30
+		),
+		fused AS (
+		  SELECT COALESCE(d.id, s.id) AS id
+		  FROM dense d FULL OUTER JOIN sparse s USING (id)
+		  ORDER BY COALESCE(1.0/(60 + d.rank), 0) + COALESCE(1.0/(60 + s.rank), 0) DESC
+		  LIMIT 20
+		),
+		ids AS (
+		  SELECT id FROM fused
+		  UNION
+		  SELECT id FROM ltm_records
+		   WHERE repo_id = $2 AND status = 'active' AND subject LIKE ANY($4)
+		)
+		SELECT r.id::text, r.subject, r.mem_type, r.content
+		FROM ltm_records r JOIN ids USING (id)`,
+		vector(queryVec), repoID, queryText, patterns)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Candidate
+	for rows.Next() {
+		var c Candidate
+		if err := rows.Scan(&c.ID, &c.Subject, &c.MemType, &c.Content); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // vector renders a float slice as pgvector's text input form: [f1,f2,...]. The
 // column is cast $n::vector, so no pgx type registration is needed for one write
 // path.

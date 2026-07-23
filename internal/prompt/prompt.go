@@ -67,8 +67,11 @@ func Estimate(s string) int { return (len(s)*10 + 31) / 32 }
 // Assemble builds the prompt for one task. It never returns an over-budget
 // prompt: sections degrade by their stated policy, and a section marked
 // "never truncated" that does not fit is an error, not a degradation (F4).
-// turns are this attempt's prior steps, oldest first, one line each.
-func Assemble(ctx context.Context, s *store.Store, runID, key string, turns []string) (*Prompt, error) {
+// turns are this attempt's prior steps, oldest first, one line each. memory is
+// the L3 records the caller already retrieved and reranked, highest score first;
+// the assembler only fits them to budget, it does not retrieve (that needs the
+// sidecar, which the prompt package has no business knowing about).
+func Assemble(ctx context.Context, s *store.Store, runID, key string, turns, memory []string) (*Prompt, error) {
 	task, err := s.Task(ctx, runID, key)
 	if err != nil {
 		return nil, err
@@ -132,10 +135,11 @@ func Assemble(ctx context.Context, s *store.Store, runID, key string, turns []st
 	}
 	fitArtifacts(sec("tool_results"), artifacts)
 	fitTurns(sec("scratchpad"), turns)
+	fitMemory(sec("memory"), memory)
 
-	// memory (L3) and repository outlines have no source yet: hybrid retrieval
-	// lands in Phase B and the repo index in B1. They stay in the table at zero
-	// so the budget stays honest.
+	// repository outlines still have no source: they arrive when the repo index
+	// feeds file outlines into this section. It stays at zero so the budget stays
+	// honest.
 
 	for i := range p.Sections {
 		s := &p.Sections[i]
@@ -158,6 +162,20 @@ func fitClaims(s *Section, claims []store.Claim) {
 		text := renderClaims(claims[:i+1])
 		if Estimate(text) > s.Budget {
 			s.Dropped = len(claims) - i
+			return
+		}
+		s.Text = text
+	}
+}
+
+// fitMemory places as many retrieved records as the budget holds. They arrive
+// highest rerank score first, so taking from the front and dropping the tail is
+// exactly the "drop lowest rerank score first" policy (§5.7).
+func fitMemory(s *Section, memory []string) {
+	for i := range memory {
+		text := strings.Join(memory[:i+1], "\n") + "\n"
+		if Estimate(text) > s.Budget {
+			s.Dropped = len(memory) - i
 			return
 		}
 		s.Text = text

@@ -40,8 +40,10 @@ func main() {
 		os.Exit(runTask(os.Args[2:]))
 	case "index":
 		os.Exit(index(os.Args[2:]))
+	case "memory":
+		os.Exit(memoryCmd(os.Args[2:]))
 	default:
-		fmt.Fprintln(os.Stderr, "usage: theorm <compile|run-task|index|debug-prompt|doctor|version>")
+		fmt.Fprintln(os.Stderr, "usage: theorm <compile|run-task|index|memory|debug-prompt|doctor|version>")
 		os.Exit(2)
 	}
 }
@@ -69,6 +71,7 @@ func runTask(args []string) int {
 	r := &agent.Runner{
 		Store: db, Tools: tools.New(tools.Native()...),
 		Model: inference.New(), Dir: *dir,
+		Retriever: &memory.Retriever{Store: db, Embed: memory.NewEmbedder()},
 	}
 	out, err := r.RunTask(ctx, *run, *task)
 	if err != nil {
@@ -82,6 +85,66 @@ func runTask(args []string) int {
 	}
 	fmt.Fprintln(os.Stderr, out.Reason)
 	return 1
+}
+
+// memoryCmd is the read side of L3: the same hybrid retrieval agents get, so a
+// bad memory can be found where it was used (§9).
+func memoryCmd(args []string) int {
+	if len(args) == 0 || args[0] != "search" {
+		fmt.Fprintln(os.Stderr, `usage: theorm memory search [--repo id] [--subjects a,b] [--top n] <query>`)
+		return 2
+	}
+	fs := flag.NewFlagSet("memory search", flag.ExitOnError)
+	repo := fs.String("repo", "", "repo id (default: go.mod module path of the cwd)")
+	subjects := fs.String("subjects", "", "comma-separated read-set subjects for the exact lane")
+	top := fs.Int("top", 6, "results to return after rerank")
+	fs.Parse(args[1:])
+	q := strings.Join(fs.Args(), " ")
+	if q == "" {
+		fmt.Fprintln(os.Stderr, "memory search: empty query")
+		return 2
+	}
+	repoID := *repo
+	if repoID == "" {
+		cwd, _ := filepath.Abs(".")
+		repoID = repoIDFor(cwd)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := store.Open(ctx, store.DSN())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "database: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+
+	var subs []string
+	if *subjects != "" {
+		subs = strings.Split(*subjects, ",")
+	}
+	r := &memory.Retriever{Store: db, Embed: memory.NewEmbedder(), TopK: *top}
+	hits, err := r.Search(ctx, repoID, q, subs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "memory search: %v\n", err)
+		return 1
+	}
+	if len(hits) == 0 {
+		fmt.Printf("no records for %q in %s (run `theorm index` first?)\n", q, repoID)
+		return 0
+	}
+	for i, h := range hits {
+		fmt.Printf("%2d. [%.3f] %-10s %s\n     %s\n", i+1, h.Score, h.MemType, h.Subject, trunc(h.Content, 160))
+	}
+	return 0
+}
+
+func trunc(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }
 
 // index runs the §5.9 cold-start pass: an entity record per source file, so a
@@ -163,7 +226,20 @@ func debugPrompt(args []string) int {
 	}
 	defer db.Close()
 
-	p, err := prompt.Assemble(ctx, db, *run, *task, nil)
+	// Retrieve L3 best-effort so the printed prompt matches what an agent sees.
+	// If the sidecar is down, note it and show the memory section empty rather
+	// than failing — this command is for reading prompts, not for gating on deps.
+	var mem []string
+	if t, err := db.Task(ctx, *run, *task); err == nil {
+		ret := &memory.Retriever{Store: db, Embed: memory.NewEmbedder()}
+		if hits, err := ret.SearchTask(ctx, t.RepoID, t.RunTitle, t.Title, t.Contract.ReadSet.Subjects); err == nil {
+			mem = memory.Contents(hits)
+		} else {
+			fmt.Fprintf(os.Stderr, "note: L3 retrieval unavailable (%v); memory section shown empty\n", err)
+		}
+	}
+
+	p, err := prompt.Assemble(ctx, db, *run, *task, nil, mem)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "assemble: %v\n", err)
 		return 1

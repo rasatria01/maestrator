@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/rasatria01/theorm/internal/inference"
+	"github.com/rasatria01/theorm/internal/memory"
 	"github.com/rasatria01/theorm/internal/prompt"
 	"github.com/rasatria01/theorm/internal/role"
 	"github.com/rasatria01/theorm/internal/store"
@@ -25,10 +26,11 @@ import (
 const repeatLimit = 3
 
 type Runner struct {
-	Store *store.Store
-	Tools *tools.Registry
-	Model inference.Model
-	Dir   string // worktree root
+	Store     *store.Store
+	Tools     *tools.Registry
+	Model     inference.Model
+	Retriever *memory.Retriever // L3; nil skips retrieval, so the loop still runs without the sidecar
+	Dir       string            // worktree root
 	// ponytail: Dir is the repository itself until the worktree pool lands in
 	// C5. Safe for read-only roles, and the write-set check is what protects
 	// the others.
@@ -70,6 +72,20 @@ func (r *Runner) RunTask(ctx context.Context, runID, key string) (Outcome, error
 	}
 	specs := toolSpecs(r.Tools.ForRole(env.Allowed))
 
+	// L3 is retrieved once: the query is the task's goal, title and read-set, none
+	// of which change across steps. A sidecar that is down is not fatal — the loop
+	// runs with an empty memory section rather than failing.
+	var mem []string
+	if r.Retriever != nil {
+		hits, err := r.Retriever.SearchTask(ctx, task.RepoID, task.RunTitle, task.Title, task.Contract.ReadSet.Subjects)
+		if err != nil {
+			r.event(ctx, env, "memory.unavailable", map[string]any{"error": err.Error()})
+		} else {
+			mem = memory.Contents(hits)
+			r.event(ctx, env, "memory.retrieved", map[string]any{"records": len(mem)})
+		}
+	}
+
 	r.event(ctx, env, "attempt.started", map[string]any{"role": task.Role, "task": key})
 	out := Outcome{AttemptID: attemptID}
 	var turns []string
@@ -79,7 +95,7 @@ func (r *Runner) RunTask(ctx context.Context, runID, key string) (Outcome, error
 	for out.Steps = 1; out.Steps <= cfg.MaxSteps; out.Steps++ {
 		// L0 is rebuilt every step from L1, L2 and the turn log. There is no
 		// conversation history the agent appends to and carries forward.
-		p, err := prompt.Assemble(ctx, r.Store, runID, key, turns)
+		p, err := prompt.Assemble(ctx, r.Store, runID, key, turns, mem)
 		if err != nil {
 			return out, err
 		}

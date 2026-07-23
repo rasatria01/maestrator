@@ -91,10 +91,23 @@ fallback. The CPU sidecar embeds them (768-dim, zero VRAM) and they land in `ltm
 keyed by the repo's module path. Re-indexing is idempotent: delete-by-subject then insert,
 in one transaction. No model is called — the whole pass is parsing.
 
-Not yet: hybrid retrieval reads these back (B2), the Curator promotes L1 into L3 (B3), decay
-and git-driven staleness (B4), and `theorm:knowledge` ingestion (B5). `theorm run --compiled`
-needs the scheduler (Phase C). The `memory` and `repository` prompt sections are wired into
-the budget but stay empty until B2 gives them a retrieval path.
+Phase B2 done: hybrid retrieval reads L3 back. `theorm memory search "..."` fuses a dense
+lane (pgvector cosine, top 30) and a sparse lane (tsvector `ts_rank_cd`, top 30) by reciprocal
+rank (k=60) to a top 20, unions the exact lane — records whose subject starts with a read-set
+prefix, always included so a task naming a file sees that file's memory — then reranks the lot
+on CPU with the sidecar's cross-encoder and returns the top 6. Agents and the dashboard will
+share this one path, so a bad memory is found where it was used.
+
+Retrieval now feeds the prompt. The agent retrieves L3 once per task — the query is the goal,
+title and read-set, none of which change across steps — and the assembler fits the reranked
+records into the `memory` section, dropping the lowest score first when the 3,000-token budget
+is tight. A sidecar that is down is not fatal: the loop runs with an empty memory section rather
+than failing. `theorm debug-prompt` retrieves best-effort too, so the printed prompt is the one
+an agent actually sees. `run-task` wires a retriever; tests and callers without a sidecar pass nil.
+
+Not yet: the Curator promotes L1 into L3 (B3), decay and git-driven staleness (B4), and
+`theorm:knowledge` ingestion (B5). `theorm run --compiled` needs the scheduler (Phase C). The
+`repository` section stays empty until repo outlines feed it.
 
 The A4 measurement — does an Explorer make the coder read fewer files — needs a competent
 executor model and the `messy-go` fixture. On llama3.2:3b the loop runs correctly and the

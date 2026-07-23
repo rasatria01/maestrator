@@ -10,6 +10,26 @@ import (
 	"github.com/rasatria01/theorm/internal/store"
 )
 
+// The memory section's policy is "drop lowest rerank score first". Records
+// arrive highest score first, so on overflow the tail is what goes.
+func TestFitMemoryDropsLowestScoreFirst(t *testing.T) {
+	s := &Section{Budget: 1000}
+	fitMemory(s, []string{"top record", "next record"})
+	if !strings.Contains(s.Text, "top record") || !strings.Contains(s.Text, "next record") || s.Dropped != 0 {
+		t.Errorf("both should fit: text=%q dropped=%d", s.Text, s.Dropped)
+	}
+
+	big := strings.Repeat("x", 400) // ~127 tokens; two will not fit in 200
+	s = &Section{Budget: 200}
+	fitMemory(s, []string{"keep " + big, "drop " + big})
+	if !strings.Contains(s.Text, "keep") || strings.Contains(s.Text, "drop") {
+		t.Errorf("only the top record should survive: %q", s.Text)
+	}
+	if s.Dropped != 1 {
+		t.Errorf("dropped=%d, want 1", s.Dropped)
+	}
+}
+
 func TestSectionBudgetsMatchTheWindow(t *testing.T) {
 	sum := 0
 	for _, b := range budgets {
@@ -92,7 +112,7 @@ func TestNoSectionExceedsItsBudget(t *testing.T) {
 		Object: "internal/legacy/**", Confidence: 1,
 	})
 
-	p, err := Assemble(ctx, s, runID, "T1", nil)
+	p, err := Assemble(ctx, s, runID, "T1", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +149,7 @@ func TestNoSectionExceedsItsBudget(t *testing.T) {
 // A shallow slot gets the same shape of prompt at half the size.
 func TestShallowClassHalvesTheBudgets(t *testing.T) {
 	s, runID, ctx := fixture(t, "gpu_shallow")
-	p, err := Assemble(ctx, s, runID, "T1", nil)
+	p, err := Assemble(ctx, s, runID, "T1", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
