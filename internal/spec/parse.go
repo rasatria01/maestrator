@@ -62,6 +62,7 @@ type Task struct {
 type ReadSet struct {
 	Subjects   []string `yaml:"subjects"`
 	ClaimKinds []string `yaml:"claim_kinds"`
+	Limit      int      `yaml:"limit"` // 0 uses the store default
 }
 
 // Acceptance is either a prose criterion (§6.1) or a typed one (§4.3).

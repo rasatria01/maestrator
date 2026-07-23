@@ -5,6 +5,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/rasatria01/theorm/internal/role"
 )
 
 // Slot sizes the feasibility check and Rule 5 are measured against (§2.3).
@@ -14,23 +16,6 @@ const (
 	MaxWriteGlobs = 20    // §4.6 control 3
 	MaxDegree     = 4
 )
-
-// Capability sets per role (§8.2). A spec's policy intersects with these; it
-// can never add a tool the role does not already have (§4.6 control 1).
-var roleTools = map[string][]string{
-	"explorer": {"read_file", "list_dir", "grep", "memory_read", "memory_write", "artifact_read"},
-	"coder": {"read_file", "write_file", "str_replace", "list_dir", "grep", "run_cmd",
-		"git_commit", "memory_read", "memory_write", "artifact_read", "task_complete"},
-	"web_verifier": {"read_file", "memory_read", "memory_write", "artifact_read", "task_complete",
-		"chrome.navigate_page", "chrome.wait_for", "chrome.take_snapshot", "chrome.click",
-		"chrome.fill", "chrome.fill_form", "chrome.press_key", "chrome.list_console_messages",
-		"chrome.list_network_requests", "chrome.get_network_request", "chrome.evaluate_script",
-		"chrome.resize_page", "chrome.emulate", "chrome.take_screenshot"},
-	"reviewer":    {"read_file", "list_dir", "grep", "memory_read", "artifact_read", "submit_verdict"},
-	"test_writer": {"read_file", "write_file", "str_replace", "grep", "run_cmd", "memory_read", "memory_write", "task_complete"},
-	"summariser":  {},
-	"curator":     {"memory_read", "ltm_propose"},
-}
 
 // Command allowlist (§8.7). Checked at compile time, not at run time.
 var cmdAllow = map[string][]string{
@@ -72,11 +57,11 @@ func Validate(s *Spec) []Diag {
 		if t.Title == "" {
 			d = append(d, Diag{t.Line, t.ID + ": title is required"})
 		}
-		caps, ok := roleTools[t.Role]
+		r, ok := role.Get(t.Role)
 		if !ok {
 			d = append(d, Diag{t.Line, fmt.Sprintf("%s: unknown role %q", t.ID, t.Role)})
 		}
-		t.Tools = clamp(caps, s.Meta.Policy.AllowTools)
+		t.Tools = clamp(r.Tools, s.Meta.Policy.AllowTools)
 
 		if !resourceClasses[t.ResourceClass] {
 			d = append(d, Diag{t.Line, fmt.Sprintf("%s: resource_class must be one of gpu_deep, gpu_shallow, cpu_only, browser", t.ID)})

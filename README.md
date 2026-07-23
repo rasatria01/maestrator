@@ -8,7 +8,13 @@ Design of record: [`docs/theorm-v2-design.md`](docs/theorm-v2-design.md).
 | Path | What |
 |------|------|
 | `cmd/theorm` | The orchestrator binary (§3.1) |
-| `internal/` | Go packages: compiler, scheduler, memory, tools, inference (not written yet) |
+| `internal/spec` | Spec parser, validator and compiler — zero model calls |
+| `internal/store` | Postgres: runs and tasks, L1 claims, L2 artifacts |
+| `internal/tools` | Tool interface, capability filtering, result interception, `run_cmd` and the memory tools |
+| `internal/prompt` | Context assembler: the §5.7 token budget and its overflow policies |
+| `internal/role` | The §7.1 role table: capabilities, system prompt, temperature, step limit |
+| `internal/inference` | Chat client for any OpenAI-compatible server (llama-server, Ollama) |
+| `internal/agent` | The §7.2 step loop: one task, one attempt |
 | `migrations/` | Postgres schema — runs, tasks, L1 claims, artifacts, L3 records, events |
 | `services/embed/` | CPU-only embedding + rerank sidecar (§2.4) |
 | `apps/dashboard/` | Next.js UI (§9) |
@@ -51,6 +57,31 @@ Phase A0 (§12) done: the compiler parses and validates a spec, clamps capabilit
 intersection, enforces the write-set ceiling and command allowlist, detects drift,
 projects waves, and emits a run of pending tasks in one transaction.
 
-Not yet: `theorm run --compiled` (needs the scheduler, Phase C), `--expand` hybrid mode,
-and `theorm:knowledge` ingestion into L3 (Phase B5). Next up is Phase A1 — `memory_write`
-and the context assembler.
+Phase A1 done: L1 the blackboard and L2 the artifact store, behind the three memory
+tools. Enforcement lives in Go, never in a prompt — 12 claims per attempt, dedupe on
+normalised content, contradictions supersede instead of overwrite, `fact` and `failure`
+require evidence, secrets are redacted before content reaches disk.
+
+Phase A2 done: the context assembler builds every prompt to a hard per-section budget
+and degrades by a stated policy. Inspect any task's exact prompt with
+`theorm debug-prompt --run <id> --task T1`.
+
+Phase A3 done: every tool result is intercepted into the artifact store and reaches the
+model as a summary plus a handle. 295 KB of `go test` output costs 21 tokens; the full
+text stays one `artifact_read` away. `run_cmd` runs allowlisted commands only, argv-split
+with no shell, with secret-shaped environment variables stripped.
+
+Phase A4 done: the agent step loop and the read-only Explorer role. Tool errors go back to
+the model as observations, narration gets one nudge then fails, and three identical calls
+are a loop, not persistence. `read_file`, `list_dir` and `grep` resolve every agent-supplied
+path against the worktree root and refuse anything that leaves it.
+
+Not yet: the coder's editing tools (`write_file`, `str_replace`, `git_commit`), `theorm run
+--compiled` (needs the scheduler, Phase C), and `theorm:knowledge` into L3 (B5). The `memory`
+and `repository` prompt sections are wired into the budget but have no source until Phase B.
+
+The A4 measurement — does an Explorer make the coder read fewer files — needs a competent
+executor model and the `messy-go` fixture. On llama3.2:3b the loop runs correctly and the
+model is the limit: it never gets past `list_dir`, which is why §2.5 specifies a 14B coder.
+
+Tests that need Postgres skip themselves when it is not up; `docker compose up -d db` first.

@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+
+	"github.com/rasatria01/theorm/internal/role"
 )
 
 // Drift is the §4.5 verdict: a spec is authored against a commit and executed
@@ -86,7 +88,7 @@ func Explain(s *Spec, d Drift) string {
 	if len(s.Meta.Policy.AllowTools) > 0 {
 		for _, t := range s.Tasks {
 			p("  ok  capability clamp: %s %d tools -> %d (spec policy narrows)",
-				t.Role, len(roleTools[t.Role]), len(t.Tools))
+				t.Role, len(role.Tools(t.Role)), len(t.Tools))
 		}
 	}
 	maxCtx := 0
