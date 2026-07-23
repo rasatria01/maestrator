@@ -129,6 +129,22 @@ func TestWriteSetsOverlap(t *testing.T) {
 	}
 }
 
+// git mutation is not allowlisted for run_cmd: it would stage files outside a
+// task's write set, the one thing git_commit exists to prevent. Only read-only
+// inspection stays.
+func TestAllowedCmdBlocksGitMutation(t *testing.T) {
+	for _, cmd := range []string{"git add -A", "git commit -m x", "git push origin main"} {
+		if AllowedCmd(cmd) == nil {
+			t.Errorf("%q should be rejected", cmd)
+		}
+	}
+	for _, cmd := range []string{"git diff", "git status", "go test ./..."} {
+		if err := AllowedCmd(cmd); err != nil {
+			t.Errorf("%q should be allowed: %v", cmd, err)
+		}
+	}
+}
+
 // §6.4's worked example: deep tasks serialize even with disjoint write sets
 // (Rule 5), shallow disjoint ones batch and switch to throughput mode (Rule 6).
 func TestWavesFollowRule5And6(t *testing.T) {

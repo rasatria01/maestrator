@@ -38,7 +38,8 @@ func (runCmd) Name() string { return "run_cmd" }
 func (runCmd) Description() string {
 	return "Run one allowlisted command in the task's working tree and return its output. " +
 		"No shell: the command is split into arguments, so pipes, redirection and && do not work. " +
-		"Allowed: go build/test/vet, gofmt, npm|pnpm run <script>, git add/commit/diff/status."
+		"Allowed: go build/test/vet, gofmt, npm|pnpm run <script>, git diff/status. " +
+			"To commit, use git_commit, which stages only your write set."
 }
 func (runCmd) Annotations() Annotations { return Annotations{Destructive: true} }
 func (runCmd) Schema() json.RawMessage {

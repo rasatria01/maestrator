@@ -81,6 +81,8 @@ twice — the path resolves inside the worktree, and it must fall inside the tas
 write set, so a model cannot widen its own reach by asking. `str_replace` demands a unique
 match. `git_commit` stages only the write-set globs (`:(glob)` pathspecs) and refuses when
 nothing in the set changed, so a commit never carries a file the task had no leave to touch.
+`run_cmd`'s git is read-only (`diff`, `status`); `add` and `commit` are off the allowlist so
+they cannot stage around the write set — mutation has one door, and it checks the write set.
 
 Not yet: `theorm run --compiled` (needs the scheduler, Phase C), and `theorm:knowledge` into
 L3 (B5). The `memory` and `repository` prompt sections are wired into the budget but have no

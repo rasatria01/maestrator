@@ -23,7 +23,8 @@ var cmdAllow = map[string][]string{
 	"gofmt": nil, // any argv
 	"npm":   {"run"},
 	"pnpm":  {"run"},
-	"git":   {"add", "commit", "diff", "status"},
+	"git":   {"diff", "status"}, // mutation goes through the git_commit tool, which stages only the write set
+
 }
 
 var resourceClasses = map[string]bool{"gpu_deep": true, "gpu_shallow": true, "cpu_only": true, "browser": true}
