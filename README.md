@@ -84,9 +84,17 @@ nothing in the set changed, so a commit never carries a file the task had no lea
 `run_cmd`'s git is read-only (`diff`, `status`); `add` and `commit` are off the allowlist so
 they cannot stage around the write set — mutation has one door, and it checks the write set.
 
-Not yet: `theorm run --compiled` (needs the scheduler, Phase C), and `theorm:knowledge` into
-L3 (B5). The `memory` and `repository` prompt sections are wired into the budget but have no
-source until Phase B.
+Phase B1 done: cold-start L3 indexing. `theorm index <dir>` walks the repo and emits one
+`entity` record per source file — Go files parsed with `go/ast` into package, exported
+signatures, imports and line count; everything else a deterministic size-plus-first-line
+fallback. The CPU sidecar embeds them (768-dim, zero VRAM) and they land in `ltm_records`
+keyed by the repo's module path. Re-indexing is idempotent: delete-by-subject then insert,
+in one transaction. No model is called — the whole pass is parsing.
+
+Not yet: hybrid retrieval reads these back (B2), the Curator promotes L1 into L3 (B3), decay
+and git-driven staleness (B4), and `theorm:knowledge` ingestion (B5). `theorm run --compiled`
+needs the scheduler (Phase C). The `memory` and `repository` prompt sections are wired into
+the budget but stay empty until B2 gives them a retrieval path.
 
 The A4 measurement — does an Explorer make the coder read fewer files — needs a competent
 executor model and the `messy-go` fixture. On llama3.2:3b the loop runs correctly and the

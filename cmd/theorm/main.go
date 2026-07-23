@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/rasatria01/theorm/internal/agent"
 	"github.com/rasatria01/theorm/internal/inference"
+	"github.com/rasatria01/theorm/internal/memory"
 	"github.com/rasatria01/theorm/internal/prompt"
 	"github.com/rasatria01/theorm/internal/spec"
 	"github.com/rasatria01/theorm/internal/store"
@@ -35,8 +38,10 @@ func main() {
 		os.Exit(debugPrompt(os.Args[2:]))
 	case "run-task":
 		os.Exit(runTask(os.Args[2:]))
+	case "index":
+		os.Exit(index(os.Args[2:]))
 	default:
-		fmt.Fprintln(os.Stderr, "usage: theorm <compile|run-task|debug-prompt|doctor|version>")
+		fmt.Fprintln(os.Stderr, "usage: theorm <compile|run-task|index|debug-prompt|doctor|version>")
 		os.Exit(2)
 	}
 }
@@ -77,6 +82,64 @@ func runTask(args []string) int {
 	}
 	fmt.Fprintln(os.Stderr, out.Reason)
 	return 1
+}
+
+// index runs the §5.9 cold-start pass: an entity record per source file, so a
+// fresh repo's first runs are not blind. Deterministic, no model, CPU embeddings.
+func index(args []string) int {
+	fs := flag.NewFlagSet("index", flag.ExitOnError)
+	repo := fs.String("repo", "", "repo id for L3 (default: go.mod module path, else dir name)")
+	fs.Parse(args)
+	dir := "."
+	if fs.NArg() > 0 {
+		dir = fs.Arg(0)
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "index: %v\n", err)
+		return 1
+	}
+	repoID := *repo
+	if repoID == "" {
+		repoID = repoIDFor(abs)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	db, err := store.Open(ctx, store.DSN())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "database: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+
+	ix := &memory.Indexer{Store: db, Embed: memory.NewEmbedder()}
+	n, err := ix.Index(ctx, repoID, abs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "index: %v\n", err)
+		return 1
+	}
+	fmt.Printf("indexed %d files into %s\n", n, repoID)
+	counts, _ := db.LTMCounts(ctx, repoID)
+	for _, t := range []string{"entity", "semantic", "procedural", "episodic"} {
+		if counts[t] > 0 {
+			fmt.Printf("  %-11s %d\n", t, counts[t])
+		}
+	}
+	return 0
+}
+
+// repoIDFor keys L3 by the same identity a spec uses (§A2): the module path when
+// there is a go.mod, otherwise the directory name.
+func repoIDFor(dir string) string {
+	if b, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
+		for ln := range strings.SplitSeq(string(b), "\n") {
+			if m, ok := strings.CutPrefix(strings.TrimSpace(ln), "module "); ok {
+				return strings.TrimSpace(m)
+			}
+		}
+	}
+	return filepath.Base(dir)
 }
 
 // debugPrompt prints the exact prompt a task would receive, with the per-section
